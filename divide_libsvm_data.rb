@@ -12,9 +12,9 @@
 # - うち5行を無作為抽出して mydata.div1.lsvm に書き込む
 # - うち3行を無作為抽出して mydata.div2.lsvm に書き込む
 # - うち2行を無作為抽出して mydata.div3.lsvm に書き込む
-# 
-# なお、LIBSVM形式のデータの場合は、こちらではなく
-# divide_libsvm_data.rb を利用のこと。
+
+$: << File.dirname(__FILE__)
+require 'libsvmdata_reader'
 
 RANDOMIZED = true
 
@@ -26,6 +26,7 @@ end
 file = ARGV[0]
 counts = []
 
+# Check counts
 begin
   counts = ARGV[1..-1].map{ |a| Integer(a) }
   raise if counts.any?{ |a| a <= 0 }
@@ -34,6 +35,21 @@ rescue
 end
 
 count_total = counts.inject{ |i, j| i + j }
+
+# Check the largest feature ID
+largest_key = -1
+read_libsvm_file(file) do |label, instance_hash|
+  if instance_hash.empty?
+    STDERR.puts "Warning: instance with no value"
+  else
+    largest_key = [largest_key, instance_hash.keys.max].max
+  end
+end
+STDERR.puts "The largest feature ID of file #{file} is #{largest_key}."
+if largest_key == -1
+  STDERR.puts "Error: largest_key not found"
+  exit
+end
 
 if file =~ /\.[^\.\/]*\z/
   file_head = $`
@@ -48,13 +64,29 @@ outfiles = counts.each_index.map{ |i| open(sprintf("%s.div%0#{digits}d%s", file_
 
 kept_data = []
 num_instances = 0
+is_first_trial = counts.map{ true }
+
 IO.foreach(file) do |line|
   kept_data << line
   if kept_data.size >= count_total
     kept_data.shuffle! if RANDOMIZED
     counts.each_with_index do |c, i|
       c.times do
-        outfiles[i] << kept_data.pop
+        source = kept_data.pop
+        if is_first_trial[i]
+          # そのファイルに書き込むのが初めての場合、
+          # 「特徴番号の最大値:0」という情報を書き込んでおく
+          # （もしその特徴番号の値を持っていればその限りではない）。
+          # ファイルが分かれても、もともとの特徴数がわかるように。
+          is_first_trial[i] = false
+          line_parsed = parse_libsvm_line(source)
+          unless line_parsed[1].has_key?(largest_key)
+            source_chomped = source.chomp
+            newline = source[(source_chomped.length)..-1]
+            source = "#{source_chomped} #{largest_key}:0#{newline}"
+          end
+        end
+        outfiles[i] << source
       end
     end
   end
